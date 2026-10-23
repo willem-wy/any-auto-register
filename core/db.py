@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import UniqueConstraint, inspect
+from sqlalchemy import UniqueConstraint, event, inspect
 from sqlmodel import Field, SQLModel, Session, create_engine, select
 
 
@@ -19,7 +19,22 @@ def _default_database_url() -> str:
 
 
 DATABASE_URL = os.getenv("ACCOUNT_MANAGER_DATABASE_URL", _default_database_url())
-engine = create_engine(DATABASE_URL)
+_IS_SQLITE = DATABASE_URL.startswith("sqlite")
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"timeout": 30} if _IS_SQLITE else {},
+)
+
+if _IS_SQLITE:
+    @event.listens_for(engine, "connect")
+    def _configure_sqlite(dbapi_connection, connection_record):
+        # 多线程任务执行器 + 调度器会并发读写同一个 SQLite 文件：
+        # 开启 WAL 并延长 busy_timeout，避免瞬时写锁直接抛 "database is locked"。
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 
 class AccountModel(SQLModel, table=True):
