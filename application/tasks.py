@@ -305,10 +305,11 @@ def mark_incomplete_tasks_interrupted() -> None:
             task.finished_at = _utcnow()
             task.updated_at = _utcnow()
             session.add(task)
+        task_ids = [task.id for task in tasks]
         session.commit()
-    for task in tasks:
+    for task_id in task_ids:
         append_task_event(
-            task.id,
+            task_id,
             "任务在服务重启后被标记为中断",
             event_type="state",
             level="warning",
@@ -870,19 +871,37 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
 
 
 def _execute_platform_action_task(payload: dict[str, Any], logger: TaskLogger) -> None:
+    if logger.is_cancel_requested():
+        logger.finish(TASK_STATUS_CANCELLED, error="任务已取消")
+        return
+
     command_platform = str(payload.get("platform", ""))
     account_id = int(payload.get("account_id", 0) or 0)
     action_id = str(payload.get("action_id", ""))
     params = dict(payload.get("params") or {})
     runtime = PlatformRuntime()
-    result = runtime.execute_action(
-        type("Command", (), {
-            "platform": command_platform,
-            "account_id": account_id,
-            "action_id": action_id,
-            "params": params,
-        })()
-    )
+    cmd = type("Command", (), {
+        "platform": command_platform,
+        "account_id": account_id,
+        "action_id": action_id,
+        "params": params,
+    })()
+
+    import concurrent.futures
+    timeout = 120
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(runtime.execute_action, cmd)
+            result = future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        logger.record_error(f"操作超时（>{timeout}秒）")
+        logger.finish(TASK_STATUS_FAILED, error=f"操作超时（>{timeout}秒），已强制终止")
+        return
+    except Exception as exc:
+        logger.record_error(str(exc))
+        logger.finish(TASK_STATUS_FAILED, error=str(exc))
+        return
+
     if not result.ok:
         logger.record_error(result.error)
         logger.finish(TASK_STATUS_FAILED, error=result.error)

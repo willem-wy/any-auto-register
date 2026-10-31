@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useParams } from 'react-router-dom'
 import { getConfig, getConfigOptions, getPlatforms } from '@/lib/app-data'
@@ -169,6 +169,97 @@ function buildActionParamDraft(action: any, acc: any) {
     draft[param?.key || ''] = ''
   })
   return draft
+}
+
+// ── 一键签到弹框 ─────────────────────────────────────────
+function QuickCheckinModal({
+  platform,
+  platformMeta,
+  onClose,
+  onDone,
+}: {
+  platform: string
+  platformMeta: any
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [taskIds, setTaskIds] = useState<string[]>([])
+  const [done, setDone] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const start = async () => {
+    setStarting(true)
+    setError(null)
+    try {
+      const res = await apiFetch(`/accounts/checkin-all?platform=${platform}`, { method: 'POST' })
+      if (res?.task_ids && res.task_ids.length > 0) {
+        setTaskIds(res.task_ids)
+      } else {
+        throw new Error(res?.detail || '创建签到任务失败')
+      }
+    } catch (err: any) {
+      setError(err.message || String(err))
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  const handleDone = () => {
+    setDone(true)
+    onDone()
+  }
+
+  const dialog = (
+    <div className="dialog-backdrop" onClick={taskIds.length === 0 ? onClose : undefined}>
+      <div className="dialog-panel dialog-panel-sm flex flex-col"
+           onClick={e => e.stopPropagation()} style={{maxHeight: '80vh'}}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)]">
+          <h2 className="text-base font-semibold text-[var(--text-primary)]">一键签到 {platformMeta?.display_name || platform}</h2>
+          <button onClick={onClose} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="px-6 py-4 flex-1 overflow-y-auto flex flex-col gap-4">
+          {taskIds.length === 0 ? (
+            <>
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-hover)] px-4 py-3 text-xs text-[var(--text-secondary)]">
+                <div className="text-sm font-medium text-[var(--text-primary)] mb-2">将为该平台所有账号执行签到：</div>
+                <div>• 自动登录 + 签到</div>
+                <div>• token 失效时自动重登</div>
+                <div>• 每日 0.1 算力积分</div>
+                {error && (
+                  <div className="mt-3 text-red-500 text-xs">{error}</div>
+                )}
+              </div>
+              <Button
+                onClick={start}
+                disabled={starting}
+                className="w-full"
+              >
+                {starting ? '启动中...' : '立即签到'}
+              </Button>
+            </>
+          ) : (
+            <div className="space-y-3">
+              <div className="text-sm text-[var(--text-primary)]">已创建 {taskIds.length} 个签到任务，正在执行...</div>
+              <TaskLogPanel taskId={taskIds[0]} onDone={handleDone} />
+              {taskIds.length > 1 && (
+                <div className="text-xs text-[var(--text-muted)]">
+                  其余 {taskIds.length - 1} 个任务在后台并行执行，可在任务记录页查看进度
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="px-6 py-3 border-t border-[var(--border)] flex justify-end">
+          <Button variant="outline" size="sm" onClick={onClose}>
+            {done ? '关闭' : '取消'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+
+  return typeof document !== 'undefined' ? createPortal(dialog, document.body) : dialog
 }
 
 // ── 注册弹框 ────────────────────────────────────────────────
@@ -955,8 +1046,16 @@ function ActionMenu({
   const [actionTaskStatus, setActionTaskStatus] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<{ action: any; params: Record<string, string> } | null>(null)
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, maxHeight: 320 })
+  const [showApiKey, setShowApiKey] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+
+  // 检查是否已有 api_key
+  const existingApiKey = useMemo(() => {
+    const creds = Array.isArray(acc?.credentials) ? acc.credentials : []
+    const item = creds.find((c: any) => c?.scope === 'platform' && c?.key === 'api_key' && c?.value)
+    return item?.value || ''
+  }, [acc?.credentials])
 
   const runAction = (action: any, params: Record<string, any>) => {
     setRunning(action.id)
@@ -1146,6 +1245,30 @@ function ActionMenu({
           }}
         />
       )}
+      {showApiKey && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={() => setShowApiKey(false)}>
+          <div className="absolute inset-0 bg-black/50" />
+          <div className="relative w-[420px] rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-5 shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-[var(--text-primary)]">API Key</h3>
+              <button onClick={() => setShowApiKey(false)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="rounded-lg border border-[var(--border)] bg-black/20 p-3">
+              <div className="text-xs font-mono text-[var(--text-secondary)] break-all select-all">{existingApiKey}</div>
+            </div>
+            <div className="mt-3 flex gap-2">
+              <button onClick={() => { navigator.clipboard.writeText(existingApiKey); setToast({ type: 'success', text: '已复制到剪贴板' }) }}
+                className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] px-3 py-2 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+                复制
+              </button>
+              <button onClick={() => setShowApiKey(false)}
+                className="flex-1 rounded-lg border border-[var(--border)] px-3 py-2 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <button onClick={onDetail} className="table-action-btn">详情</button>
       {actions.length > 0 && (
         <div className="relative">
@@ -1157,7 +1280,7 @@ function ActionMenu({
               className="fixed z-[9999] w-[220px] overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--bg-card)]/96 py-1.5 shadow-[var(--shadow-soft)] "
               style={{ top: menuPosition.top, left: menuPosition.left, maxHeight: menuPosition.maxHeight }}
             >
-              {actions.map(a => (
+              {actions.filter(a => a.id !== 'create_api_key').map(a => (
                 <button key={a.id}
                   onClick={() => {
                     setOpen(false)
@@ -1175,6 +1298,33 @@ function ActionMenu({
                   {running === a.id ? '执行中...' : a.label}
                 </button>
               ))}
+              {/* API Key: 有则查看，无则创建 */}
+              {existingApiKey ? (
+                <button
+                  onClick={() => { setOpen(false); setShowApiKey(true) }}
+                  className="w-full px-3 py-2 text-left text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]">
+                  查看 API Key
+                </button>
+              ) : (
+                (() => {
+                  const createAction = actions.find(a => a.id === 'create_api_key')
+                  if (!createAction) return null
+                  return (
+                    <button
+                      onClick={() => {
+                        setOpen(false)
+                        setPendingAction({
+                          action: createAction,
+                          params: buildActionParamDraft(createAction, acc),
+                        })
+                      }}
+                      disabled={!!running}
+                      className="w-full px-3 py-2 text-left text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:opacity-50">
+                      {running === 'create_api_key' ? '执行中...' : '添加 API Key'}
+                    </button>
+                  )
+                })()
+              )}
               <div className="my-1 border-t border-[var(--border)]/70" />
               <button
                 onClick={() => {
@@ -1523,6 +1673,8 @@ export default function Accounts() {
   const [showImport, setShowImport] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
   const [showRegister, setShowRegister] = useState(false)
+  const [showQuickCheckin, setShowQuickCheckin] = useState(false)
+  const [quickCheckinSupported, setQuickCheckinSupported] = useState(false)
   const [platformsMap, setPlatformsMap] = useState<Record<string, any>>({})
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [actionResult, setActionResult] = useState<{ title: string; payload: any } | null>(null)
@@ -1550,6 +1702,23 @@ export default function Accounts() {
   useEffect(() => {
     setSelectedIds(new Set())
   }, [tab, filterStatus, debouncedSearch])
+
+  useEffect(() => {
+    let cancelled = false
+    setQuickCheckinSupported(false)
+    setShowQuickCheckin(false)
+    if (!tab) return
+    loadPlatformActions(tab)
+      .then(actions => {
+        if (!cancelled) {
+          setQuickCheckinSupported(actions.some((action: any) => action.id === 'daily_checkin'))
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setQuickCheckinSupported(false)
+      })
+    return () => { cancelled = true }
+  }, [tab])
 
   const load = useCallback(async (p = tab, s = debouncedSearch, fs = filterStatus) => {
     setLoading(true)
@@ -1629,6 +1798,7 @@ export default function Accounts() {
       {showImport && <ImportModal platform={tab} onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); load() }} />}
       {showAdd && <AddModal platform={tab} onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); load() }} />}
       {showRegister && <RegisterModal platform={tab} platformMeta={platformsMap[tab]} onClose={() => setShowRegister(false)} onDone={() => load()} />}
+      {showQuickCheckin && quickCheckinSupported && <QuickCheckinModal platform={tab} platformMeta={platformsMap[tab]} onClose={() => setShowQuickCheckin(false)} onDone={() => load()} />}
       {actionResult && <ActionResultModal title={actionResult.title} payload={actionResult.payload} onClose={() => setActionResult(null)} />}
       {batchTask && (
         <ActionTaskModal
@@ -1650,13 +1820,13 @@ export default function Accounts() {
       )}
 
       <Card className="shrink-0 bg-[var(--bg-pane)]/40 border border-[var(--border)] shadow-sm">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 px-5 py-4 border-b border-[var(--border)]/50">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-3 px-5 py-4 border-b border-[var(--border)]/50">
+          <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-lg font-semibold tracking-tight text-[var(--text-primary)]">
               {platformLabel}
             </h1>
             <div className="h-4 w-[1px] bg-[var(--border)]"></div>
-            <div className="flex items-center gap-1.5 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
               <span className="text-[var(--text-muted)]">共 {total} 个</span>
               {visibleTrial > 0 && <span className="flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-500 ring-1 ring-inset ring-emerald-500/20">试用 {visibleTrial}</span>}
               {visibleSubscribed > 0 && <span className="flex items-center rounded-full bg-blue-500/10 px-2 py-0.5 font-medium text-blue-500 ring-1 ring-inset ring-blue-500/20">订阅 {visibleSubscribed}</span>}
@@ -1665,8 +1835,14 @@ export default function Accounts() {
               {selectedCount > 0 && <span className="flex items-center rounded-full bg-[var(--text-primary)]/10 px-2 py-0.5 font-medium text-[var(--text-primary)] ring-1 ring-inset ring-[var(--text-primary)]/20">已选 {selectedCount}</span>}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => setShowRegister(true)} className="h-8 shadow-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            {quickCheckinSupported && (
+              <Button size="sm" onClick={() => setShowQuickCheckin(true)} className="h-8 shadow-sm bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white border-0">
+                <Zap className="mr-1.5 h-3.5 w-3.5" />
+                一键签到
+              </Button>
+            )}
+            <Button size="sm" variant="outline" onClick={() => setShowRegister(true)} className="h-8 bg-transparent">
               <Plus className="mr-1.5 h-3.5 w-3.5" />
               自动注册
             </Button>

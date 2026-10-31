@@ -167,6 +167,25 @@ function GeneralTab({
       <div className="border-t border-[var(--border)]" />
 
       <SettingGroup
+        title="签到通知"
+        desc="一键签到批次完成后，将汇总结果发送到该 webhook；留空则不发送。"
+      >
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] divide-y divide-[var(--border)]/50">
+          <SettingRow label="Webhook 地址">
+            <input
+              type="text"
+              value={form.checkin_report_webhook_url || ''}
+              onChange={(e) => setForm((f) => ({ ...f, checkin_report_webhook_url: e.target.value }))}
+              placeholder="http://127.0.0.1:3002/pp-studio/api/webhooks/feishu-alert"
+              className="control-surface"
+            />
+          </SettingRow>
+        </div>
+      </SettingGroup>
+
+      <div className="border-t border-[var(--border)]" />
+
+      <SettingGroup
         title="浏览器复用"
         desc="第三方账号走后台浏览器自动时，通常需要复用本机已登录浏览器。"
       >
