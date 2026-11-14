@@ -195,6 +195,14 @@ def _build_generic_usage_metrics(overview: dict[str, Any]) -> tuple[list[dict[st
     return primary, secondary, sections
 
 
+def _build_lk888_metrics(overview: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    primary: list[dict[str, Any]] = []
+    secondary: list[dict[str, Any]] = []
+    _append_metric(primary, _metric("lk888_balance", "余额", overview.get("balance"), tone="good"))
+    _append_metric(secondary, _metric("lk888_space", "空间", overview.get("space"), tone="muted"))
+    return primary, secondary
+
+
 def build_account_display_summary(
     *,
     platform: str,
@@ -229,6 +237,11 @@ def build_account_display_summary(
     chatgpt_primary, chatgpt_secondary = _build_chatgpt_metrics(overview)
     primary_metrics.extend(chatgpt_primary)
     secondary_metrics.extend(chatgpt_secondary)
+
+    if platform == "lk888":
+        lk888_primary, lk888_secondary = _build_lk888_metrics(overview)
+        primary_metrics.extend(lk888_primary)
+        secondary_metrics.extend(lk888_secondary)
 
     generic_primary, generic_secondary, generic_sections = _build_generic_usage_metrics(overview)
     primary_metrics.extend(generic_primary)

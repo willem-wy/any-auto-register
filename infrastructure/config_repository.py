@@ -12,6 +12,7 @@ class ConfigRepository:
         "cpa_api_url", "cpa_api_key",
         "team_manager_url", "team_manager_key",
         "any2api_url", "any2api_password",
+        "checkin_report_webhook_url",
     }
 
     def __init__(self, definitions: ProviderDefinitionsRepository | None = None):

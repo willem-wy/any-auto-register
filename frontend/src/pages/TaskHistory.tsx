@@ -4,7 +4,7 @@ import { apiFetch } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { getTaskStatusText, TASK_STATUS_VARIANTS } from '@/lib/tasks'
-import { RefreshCw, Activity, CheckCircle2, AlertTriangle, Clock3, ChevronDown } from 'lucide-react'
+import { RefreshCw, Activity, CheckCircle2, AlertTriangle, Clock3, ChevronDown, X } from 'lucide-react'
 
 function shortId(id: string) {
   if (!id) return '-'
@@ -37,6 +37,22 @@ export default function TaskHistory() {
   const [status, setStatus] = useState('')
   const [platforms, setPlatforms] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
+  const [cancelling, setCancelling] = useState<Set<string>>(new Set())
+
+  const cancelTask = async (taskId: string) => {
+    if (!confirm('确定要取消这个任务吗？')) return
+    setCancelling((prev) => new Set(prev).add(taskId))
+    try {
+      await apiFetch(`/tasks/${taskId}/cancel`, { method: 'POST' })
+      await load()
+    } finally {
+      setCancelling((prev) => {
+        const next = new Set(prev)
+        next.delete(taskId)
+        return next
+      })
+    }
+  }
 
   const load = async () => {
     setLoading(true)
@@ -158,12 +174,13 @@ export default function TaskHistory() {
                 <th className="px-4 py-2.5 text-left text-xs font-medium text-[var(--text-muted)]">进度</th>
                 <th className="px-4 py-2.5 text-left text-xs font-medium text-[var(--text-muted)]">成功/失败</th>
                 <th className="px-4 py-2.5 text-left text-xs font-medium text-[var(--text-muted)]">错误</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-[var(--text-muted)]">操作</th>
               </tr>
             </thead>
             <tbody>
               {tasks.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-sm text-[var(--text-muted)]">
+                  <td colSpan={8} className="px-4 py-12 text-center text-sm text-[var(--text-muted)]">
                     暂无任务记录
                   </td>
                 </tr>
@@ -245,6 +262,22 @@ export default function TaskHistory() {
                         >
                           {errorText}
                         </span>
+                      ) : (
+                        <span className="text-xs text-[var(--text-muted)]">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {['running', 'claimed', 'pending', 'cancel_requested'].includes(task.status) ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                          onClick={() => cancelTask(task.id)}
+                          disabled={cancelling.has(task.id)}
+                        >
+                          <X className="h-3.5 w-3.5 mr-1" />
+                          {cancelling.has(task.id) ? '取消中' : '取消'}
+                        </Button>
                       ) : (
                         <span className="text-xs text-[var(--text-muted)]">-</span>
                       )}

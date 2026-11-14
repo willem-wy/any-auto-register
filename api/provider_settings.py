@@ -73,6 +73,8 @@ def test_provider(body: ProviderTestRequest):
 
     if body.provider_type == "mailbox":
         return _test_mailbox(definition.driver_type or body.provider_key, extra, definition)
+    elif body.provider_type == "proxy":
+        return _test_proxy(definition.driver_type or body.provider_key, extra)
     elif body.provider_type == "captcha":
         return {"ok": True, "message": "验证码服务暂不支持在线测试，请在注册任务中验证"}
     elif body.provider_type == "sms":
@@ -117,3 +119,53 @@ def _test_mailbox(driver_type: str, extra: dict, definition) -> dict:
             "error": f"测试失败: {str(exc)}",
             "detail": traceback.format_exc()[-500:],
         }
+
+
+def _mask_proxy_url(url: str) -> str:
+    """隐藏代理 URL 中的用户名密码，便于回显。"""
+    import re
+    return re.sub(r"//([^:@/]+):([^@/]+)@", r"//\1:***@", str(url or ""))
+
+
+def _test_proxy(provider_key: str, extra: dict) -> dict:
+    """创建代理 provider → 取一个代理 → 经它请求一次外网，验证可用性。"""
+    import time
+    import requests
+    from core.proxy_providers import create_proxy_provider
+
+    try:
+        provider = create_proxy_provider(provider_key, extra)
+    except Exception as exc:
+        return {"ok": False, "error": f"创建代理 provider 失败: {exc}"}
+
+    try:
+        proxy_url = provider.get_proxy()
+    except Exception as exc:
+        return {"ok": False, "error": f"获取代理失败: {exc}"}
+
+    if not proxy_url:
+        return {"ok": False, "error": "未获取到代理，请检查提取接口或网关配置"}
+
+    started = time.time()
+    try:
+        resp = requests.get(
+            "https://myip.ipip.net",
+            proxies={"http": proxy_url, "https": proxy_url},
+            timeout=12,
+        )
+        resp.raise_for_status()
+        info = resp.text.strip()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "proxy_url": _mask_proxy_url(proxy_url),
+            "error": f"代理连通失败: {exc}",
+        }
+
+    elapsed_ms = int((time.time() - started) * 1000)
+    return {
+        "ok": True,
+        "message": f"代理可用（{elapsed_ms}ms）：{info}",
+        "proxy_url": _mask_proxy_url(proxy_url),
+        "exit_info": info,
+    }

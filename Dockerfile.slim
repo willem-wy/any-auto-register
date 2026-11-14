@@ -1,0 +1,30 @@
+# 协议模式专用镜像：不含 Chromium / Xvfb / VNC / Solver
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONUTF8=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    PIP_DEFAULT_TIMEOUT=120
+
+WORKDIR /app
+
+# 国内网络下直连 deb.debian.org / pypi.org 很慢，构建阶段切到清华镜像
+RUN set -eux; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i -E 's#https?://(deb|security)\.debian\.org#https://mirrors.tuna.tsinghua.edu.cn#g' "$f"; \
+    done; \
+    apt-get -o Acquire::ForceIPv4=true update; \
+    apt-get install -y --no-install-recommends ca-certificates libgomp1; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements-slim.txt ./
+RUN pip install --no-cache-dir -r requirements-slim.txt
+
+COPY . .
+RUN rm -rf .venv frontend electron node_modules __pycache__ data
+
+ENV APP_PASSWORD=""
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

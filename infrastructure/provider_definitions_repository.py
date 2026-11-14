@@ -67,6 +67,20 @@ _BUILTIN_DEFINITIONS: list[dict] = [
     },
     {
         "provider_type": "mailbox",
+        "provider_key": "mailtm_api",
+        "label": "mail.tm（自动生成）",
+        "description": "免费临时邮箱，API 直连无需代理，自动生成随机邮箱",
+        "driver_type": "mailtm_api",
+        "default_auth_mode": "",
+        "enabled": True,
+        "category": "free",
+        "auth_modes": [],
+        "fields": [
+            {"key": "mailtm_api_url", "label": "API 地址（可选）", "placeholder": "https://api.mail.tm", "category": "connection"},
+        ],
+    },
+    {
+        "provider_type": "mailbox",
         "provider_key": "tempmail_web_api",
         "label": "Temp-Mail.org",
         "description": "免费临时邮箱，需要浏览器环境（Camoufox）",
@@ -235,6 +249,34 @@ _BUILTIN_DEFINITIONS: list[dict] = [
         "category": "custom",
         "auth_modes": [],
         "fields": [],
+    },
+    {
+        "provider_type": "mailbox",
+        "provider_key": "generic_imap_mailbox",
+        "label": "通用 IMAP 邮箱",
+        "description": "直接使用任意 IMAP 邮箱（如阿里企业邮箱、QQ邮箱等）接收验证码，支持自定义域名",
+        "driver_type": "generic_imap_mailbox",
+        "default_auth_mode": "password",
+        "enabled": True,
+        "category": "custom",
+        "auth_modes": [{"value": "password", "label": "账号密码"}],
+        "fields": [
+            {"key": "generic_imap_host", "label": "IMAP 服务器", "placeholder": "imap.qiye.aliyun.com", "category": "connection"},
+            {"key": "generic_imap_user", "label": "IMAP 用户名（完整邮箱）", "placeholder": "admin@e2mail.cc.cd", "category": "auth"},
+            {"key": "generic_imap_pass", "label": "IMAP 密码", "secret": True, "category": "auth"},
+            {"key": "generic_imap_domain", "label": "邮箱域名", "placeholder": "e2mail.cc.cd", "category": "connection"},
+            {
+                "key": "generic_imap_mode",
+                "label": "收件地址模式",
+                "type": "select",
+                "options": [
+                    {"value": "random", "label": "随机前缀（需服务端支持全地址收取）"},
+                    {"value": "plus", "label": "加号子地址（用户名+随机标记，如 admin+abc123@域名）"},
+                ],
+                "category": "connection",
+                "hint": "域名未开启全地址收取时选加号子地址；验证码邮件会投递到 IMAP 账号主邮箱，按收件地址区分。",
+            },
+        ],
     },
     # ── captcha ──────────────────────────────────────────────────────
     {

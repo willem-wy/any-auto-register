@@ -15,6 +15,7 @@ DEFAULT_LAOUDO_API_URL = "https://laoudo.com/api/email"
 DEFAULT_AITRE_API_URL = "https://mail.aitre.cc/api/tempmail"
 DEFAULT_TEMPMAIL_LOL_API_URL = "https://api.tempmail.lol/v2"
 DEFAULT_TEMPMAIL_WEB_BASE_URL = "https://web2.temp-mail.org"
+DEFAULT_MAILTM_API_URL = "https://api.mail.tm"
 
 
 @dataclass
@@ -163,6 +164,13 @@ def _create_tempmail(extra: dict, proxy: str | None) -> 'BaseMailbox':
     return TempMailLolMailbox(proxy=proxy)
 
 
+def _create_mailtm(extra: dict, proxy: str | None) -> 'BaseMailbox':
+    return MailTmMailbox(
+        api_url=extra.get("mailtm_api_url", ""),
+        proxy=proxy,
+    )
+
+
 def _create_tempmail_web(extra: dict, proxy: str | None) -> 'BaseMailbox':
     return TempMailWebMailbox(
         base_url=extra.get("tempmail_web_base_url", ""),
@@ -259,10 +267,23 @@ def _create_generic_http(extra: dict, proxy: str | None, *, pipeline_config: dic
     )
 
 
+def _create_generic_imap(extra: dict, proxy: str | None) -> 'BaseMailbox':
+    return GenericIMAPMailbox(
+        imap_host=extra.get("generic_imap_host", ""),
+        imap_user=extra.get("generic_imap_user", ""),
+        imap_pass=extra.get("generic_imap_pass", ""),
+        email_domain=extra.get("generic_imap_domain", ""),
+        address_mode=extra.get("generic_imap_mode", "") or "random",
+        proxy=proxy,
+    )
+
+
 MAILBOX_FACTORY_REGISTRY = {
     "generic_http_mailbox": _create_generic_http,
+    "generic_imap_mailbox": _create_generic_imap,
     "tempmail_lol_api": _create_tempmail,
     "tempmail_web_api": _create_tempmail_web,
+    "mailtm_api": _create_mailtm,
     "duckmail_api": _create_duckmail,
     "ddg_email": _create_ddg_email,
     "ddg_email_api": _create_ddg_email,
@@ -274,8 +295,10 @@ MAILBOX_FACTORY_REGISTRY = {
     "laoudo_api": _create_laoudo,
     # backward-compat fallback
     "generic_http": _create_generic_http,
+    "generic_imap": _create_generic_imap,
     "tempmail_lol": _create_tempmail,
     "tempmail_web": _create_tempmail_web,
+    "mailtm": _create_mailtm,
     "duckmail": _create_duckmail,
     "freemail": _create_freemail,
     "moemail": _create_moemail,
@@ -475,9 +498,10 @@ class LaoudoMailbox(BaseMailbox):
 
 class AitreMailbox(BaseMailbox):
     """mail.aitre.cc 临时邮箱"""
-    def __init__(self, email: str, api_url: str = ""):
+    def __init__(self, email: str, api_url: str = "", proxy: str = None):
         self._email = email
         self.api = (api_url or DEFAULT_AITRE_API_URL).rstrip("/")
+        self.proxy = {"http": proxy, "https": proxy} if proxy else None
 
     def get_email(self) -> MailboxAccount:
         return MailboxAccount(email=self._email)
@@ -485,7 +509,7 @@ class AitreMailbox(BaseMailbox):
     def get_current_ids(self, account: MailboxAccount) -> set:
         import requests
         try:
-            r = requests.get(f"{self.api}/emails", params={"email": account.email}, timeout=10)
+            r = requests.get(f"{self.api}/emails", params={"email": account.email}, proxies=self.proxy, timeout=10)
             emails = r.json().get("emails", [])
             return {str(m["id"]) for m in emails if "id" in m}
         except Exception:
@@ -502,11 +526,11 @@ class AitreMailbox(BaseMailbox):
             if last_check:
                 params["lastCheck"] = last_check
             try:
-                r = requests.get(f"{self.api}/poll", params=params, timeout=10)
+                r = requests.get(f"{self.api}/poll", params=params, proxies=self.proxy, timeout=10)
                 data = r.json()
                 last_check = data.get("lastChecked")
                 if data.get("count", 0) > 0:
-                    r2 = requests.get(f"{self.api}/emails", params={"email": account.email}, timeout=10)
+                    r2 = requests.get(f"{self.api}/emails", params={"email": account.email}, proxies=self.proxy, timeout=10)
                     for mail in r2.json().get("emails", []):
                         mid = str(mail.get("id", ""))
                         if mid in seen:
@@ -534,11 +558,11 @@ class AitreMailbox(BaseMailbox):
             if last_check:
                 params["lastCheck"] = last_check
             try:
-                r = requests.get(f"{self.api}/poll", params=params, timeout=10)
+                r = requests.get(f"{self.api}/poll", params=params, proxies=self.proxy, timeout=10)
                 data = r.json()
                 last_check = data.get("lastChecked")
                 if data.get("count", 0) > 0:
-                    r2 = requests.get(f"{self.api}/emails", params={"email": account.email}, timeout=10)
+                    r2 = requests.get(f"{self.api}/emails", params={"email": account.email}, proxies=self.proxy, timeout=10)
                     for mail in r2.json().get("emails", []):
                         mid = str(mail.get("id", ""))
                         if mid in seen:
@@ -642,6 +666,155 @@ class TempMailLolMailbox(BaseMailbox):
                         continue
                     seen.add(mid)
                     text = str(mail.get("subject", "")) + " " + str(mail.get("body", "")) + " " + str(mail.get("html", ""))
+                    link = _extract_verification_link(text, keyword)
+                    if link:
+                        return link
+            except Exception:
+                pass
+            time.sleep(3)
+        raise TimeoutError(f"等待验证链接超时 ({timeout}s)")
+
+
+class MailTmMailbox(BaseMailbox):
+    """mail.tm 免费临时邮箱（API 直连，无需代理）"""
+
+    def __init__(self, proxy: str = None, api_url: str = ""):
+        self.api = (api_url or DEFAULT_MAILTM_API_URL).rstrip("/")
+        self.proxy = {"http": proxy, "https": proxy} if proxy else None
+
+    def get_email(self) -> MailboxAccount:
+        import random
+        import string
+        import requests
+
+        r = requests.get(f"{self.api}/domains", proxies=self.proxy, timeout=15)
+        domains = [
+            str(item.get("domain") or "")
+            for item in (r.json() or {}).get("hydra:member", [])
+            if item.get("isActive")
+        ]
+        domains = [d for d in domains if d]
+        if not domains:
+            raise RuntimeError(f"mail.tm 无可用域名: HTTP {r.status_code} {r.text[:200]}")
+
+        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=10))
+        address = f"lk{suffix}@{random.choice(domains)}"
+        password = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+        r = requests.post(f"{self.api}/accounts",
+                          json={"address": address, "password": password},
+                          proxies=self.proxy, timeout=15)
+        if r.status_code not in (200, 201):
+            raise RuntimeError(f"mail.tm 创建邮箱失败: HTTP {r.status_code} {r.text[:200]}")
+
+        token = self._fetch_token(address, password)
+        print(f"[mail.tm] 创建邮箱: {address}")
+        return MailboxAccount(
+            email=address,
+            account_id=token,
+            extra={
+                "provider_resource": {
+                    "provider_type": "mailbox",
+                    "provider_name": "mailtm",
+                    "resource_type": "mailbox",
+                    "resource_identifier": address,
+                    "handle": address,
+                    "display_name": address,
+                    "metadata": {
+                        "email": address,
+                        "password": password,
+                        "token": token,
+                    },
+                },
+            },
+        )
+
+    def _fetch_token(self, address: str, password: str) -> str:
+        import requests
+
+        r = requests.post(f"{self.api}/token",
+                          json={"address": address, "password": password},
+                          proxies=self.proxy, timeout=15)
+        token = str((r.json() or {}).get("token") or "")
+        if not token:
+            raise RuntimeError(f"mail.tm 获取 token 失败: HTTP {r.status_code} {r.text[:200]}")
+        return token
+
+    def _auth_headers(self, account: MailboxAccount) -> dict:
+        return {"Authorization": f"Bearer {account.account_id}"}
+
+    def _fetch_messages(self, account: MailboxAccount) -> list:
+        import requests
+
+        r = requests.get(f"{self.api}/messages",
+                         headers=self._auth_headers(account),
+                         proxies=self.proxy, timeout=10)
+        r.raise_for_status()
+        return (r.json() or {}).get("hydra:member", []) or []
+
+    def _fetch_detail(self, account: MailboxAccount, message_id: str) -> dict:
+        import requests
+
+        r = requests.get(f"{self.api}/messages/{message_id}",
+                         headers=self._auth_headers(account),
+                         proxies=self.proxy, timeout=10)
+        r.raise_for_status()
+        return r.json() or {}
+
+    @staticmethod
+    def _message_text(detail: dict) -> str:
+        html = detail.get("html")
+        if isinstance(html, list):
+            html = " ".join(str(part) for part in html)
+        return " ".join([
+            str(detail.get("subject") or ""),
+            str(detail.get("text") or ""),
+            str(html or ""),
+        ])
+
+    def get_current_ids(self, account: MailboxAccount) -> set:
+        try:
+            return {str(item.get("id", "")) for item in self._fetch_messages(account) if item.get("id")}
+        except Exception:
+            return set()
+
+    def wait_for_code(self, account: MailboxAccount, keyword: str = "",
+                      timeout: int = 120, before_ids: set = None, code_pattern: str = None) -> str:
+        import time
+
+        seen = set(before_ids or [])
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                for meta in self._fetch_messages(account):
+                    mid = str(meta.get("id", ""))
+                    if not mid or mid in seen:
+                        continue
+                    seen.add(mid)
+                    text = self._message_text(self._fetch_detail(account, mid))
+                    if keyword and keyword.lower() not in text.lower():
+                        continue
+                    m = re.search(code_pattern or r'(?<!\d)(\d{6})(?!\d)', text)
+                    if m:
+                        return m.group(1) if m.groups() else m.group(0)
+            except Exception:
+                pass
+            time.sleep(3)
+        raise TimeoutError(f"等待验证码超时 ({timeout}s)")
+
+    def wait_for_link(self, account: MailboxAccount, keyword: str = "",
+                      timeout: int = 120, before_ids: set = None) -> str:
+        import time
+
+        seen = set(before_ids or [])
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                for meta in self._fetch_messages(account):
+                    mid = str(meta.get("id", ""))
+                    if not mid or mid in seen:
+                        continue
+                    seen.add(mid)
+                    text = self._message_text(self._fetch_detail(account, mid))
                     link = _extract_verification_link(text, keyword)
                     if link:
                         return link
@@ -1974,6 +2147,153 @@ class DDGEmailMailbox(BaseMailbox):
             time.sleep(5)
 
         raise TimeoutError(f"DDG Email IMAP 等待验证码超时 ({timeout}s)")
+
+    def wait_for_code(self, account: MailboxAccount, keyword: str = "",
+                      timeout: int = 120, before_ids: set = None,
+                      code_pattern: str = None) -> str:
+        return self._imap_search_code(account.email, timeout, code_pattern)
+
+
+class GenericIMAPMailbox(BaseMailbox):
+    """通用 IMAP 邮箱 - 直接使用任意 IMAP 邮箱接收验证码"""
+
+    def __init__(self, imap_host: str, imap_user: str, imap_pass: str,
+                 email_domain: str = "", address_mode: str = "random",
+                 proxy: str = None):
+        self.imap_host = imap_host
+        self.imap_user = imap_user
+        self.imap_pass = imap_pass
+        self.email_domain = email_domain
+        self.address_mode = address_mode or "random"
+        self.proxy = proxy
+
+    def get_email(self) -> MailboxAccount:
+        import random
+        import string
+
+        if not self.email_domain:
+            raise RuntimeError("通用 IMAP 邮箱未配置域名")
+
+        username = "".join(random.choices(string.ascii_lowercase + string.digits, k=10))
+        if self.address_mode == "plus":
+            local = self.imap_user.split("@", 1)[0] or "mailbox"
+            email = f"{local}+{username}@{self.email_domain}"
+        else:
+            email = f"{username}@{self.email_domain}"
+        print(f"[IMAP Mailbox] 生成邮箱: {email}")
+
+        return MailboxAccount(
+            email=email,
+            account_id=email,
+            extra={
+                "provider_resource": {
+                    "provider_type": "mailbox",
+                    "provider_name": "generic_imap",
+                    "resource_type": "mailbox",
+                    "resource_identifier": email,
+                    "handle": email,
+                    "display_name": email,
+                    "metadata": {
+                        "email": email,
+                        "imap_host": self.imap_host,
+                        "imap_user": self.imap_user,
+                    },
+                },
+            },
+        )
+
+    def get_current_ids(self, account: MailboxAccount) -> set:
+        return set()
+
+    def _imap_search_code(self, target_email: str, timeout: int, code_pattern: str = None) -> str:
+        import imaplib
+        import email as email_lib
+        import time
+
+        pattern = code_pattern or r'(?<!\d)(\d{6})(?!\d)'
+        start = time.time()
+        seen_ids: set[bytes] = set()
+        baseline_done = False
+
+        while time.time() - start < timeout:
+            conn = None
+            try:
+                conn = imaplib.IMAP4_SSL(self.imap_host, 993, timeout=10)
+                conn.login(self.imap_user, self.imap_pass)
+                conn.select("INBOX", readonly=True)
+
+                _, msg_nums = conn.search(None, "ALL")
+                ids = msg_nums[0].split() if msg_nums and msg_nums[0] else []
+
+                if not baseline_done:
+                    seen_ids = set(ids)
+                    baseline_done = True
+                    print(f"[IMAP Mailbox] baseline: {len(seen_ids)} existing emails skipped")
+                    conn.logout()
+                    conn = None
+                    time.sleep(5)
+                    continue
+
+                for mid in reversed(ids[-30:]):
+                    if mid in seen_ids:
+                        continue
+                    seen_ids.add(mid)
+
+                    _, msg_data = conn.fetch(mid, "(RFC822)")
+                    if not msg_data or not msg_data[0]:
+                        continue
+                    raw = msg_data[0][1]
+                    msg = email_lib.message_from_bytes(raw)
+
+                    to_addr = str(msg.get("To", "") or "").lower()
+                    subject = str(msg.get("Subject", "") or "")
+
+                    # 共享邮箱场景：只认收件地址命中（含加号子地址/代收头），避免并发任务串码
+                    deliver_headers = " ".join([
+                        to_addr,
+                        str(msg.get("Delivered-To", "") or "").lower(),
+                        str(msg.get("X-Original-To", "") or "").lower(),
+                    ])
+                    if target_email.lower() not in deliver_headers:
+                        continue
+
+                    body_parts = []
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            ct = part.get_content_type()
+                            if ct in ("text/plain", "text/html"):
+                                payload = part.get_payload(decode=True)
+                                if payload:
+                                    charset = part.get_content_charset() or "utf-8"
+                                    body_parts.append(payload.decode(charset, errors="replace"))
+                    else:
+                        payload = msg.get_payload(decode=True)
+                        if payload:
+                            charset = msg.get_content_charset() or "utf-8"
+                            body_parts.append(payload.decode(charset, errors="replace"))
+
+                    combined = subject + " " + " ".join(body_parts)
+                    combined = re.sub(r'<style[^>]*>.*?</style>', '', combined, flags=re.DOTALL | re.IGNORECASE)
+                    combined = re.sub(r'<script[^>]*>.*?</script>', '', combined, flags=re.DOTALL | re.IGNORECASE)
+                    combined = re.sub(r'<[^>]+>', ' ', combined)
+                    m = re.search(pattern, combined)
+                    if m:
+                        code = m.group(1) if m.groups() else m.group(0)
+                        print(f"[IMAP Mailbox] 获取验证码: {code}")
+                        return code
+
+                conn.logout()
+            except (imaplib.IMAP4.error, OSError) as e:
+                print(f"[IMAP Mailbox] 连接异常: {e}")
+            finally:
+                if conn:
+                    try:
+                        conn.logout()
+                    except Exception:
+                        pass
+            time.sleep(5)
+
+        raise TimeoutError(f"IMAP 等待验证码超时 ({timeout}s)")
 
     def wait_for_code(self, account: MailboxAccount, keyword: str = "",
                       timeout: int = 120, before_ids: set = None,

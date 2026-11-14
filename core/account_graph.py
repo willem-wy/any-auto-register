@@ -32,6 +32,7 @@ PLATFORM_CREDENTIAL_TYPES: dict[str, str] = {
     "customer_id": "identifier",
     "referral_code": "identifier",
     "account_id": "identifier",
+    "device_id": "identifier",
     "org_id": "identifier",
     "auth_token": "token",
     "accessToken": "token",

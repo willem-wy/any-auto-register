@@ -166,6 +166,11 @@ function buildActionParamDraft(action: any, acc: any) {
       draft[param.key] = `${emailPrefix}Development`
       return
     }
+    if (Array.isArray(param?.options) && param.options.length > 0) {
+      const first = param.options[0]
+      draft[param.key] = typeof first === 'string' ? first : String(first?.value ?? '')
+      return
+    }
     draft[param?.key || ''] = ''
   })
   return draft
@@ -972,17 +977,24 @@ function ActionParamsModal({
         <div className="px-6 py-4 space-y-4">
           {params.map((param: any) => {
             const value = form[param.key] ?? ''
-            if (Array.isArray(param.options) && param.options.length > 0) {
+            const options: Array<{ value: string; label: string }> = Array.isArray(param.options)
+              ? param.options.map((option: string | { value?: unknown; label?: unknown }) => (
+                  typeof option === 'string'
+                    ? { value: option, label: option }
+                    : { value: String(option?.value ?? ''), label: String(option?.label ?? option?.value ?? '') }
+                ))
+              : []
+            if (options.length > 0) {
               return (
                 <label key={param.key} className="block">
                   <div className="mb-1 text-xs text-[var(--text-muted)]">{param.label || param.key}</div>
                   <select
-                    value={value}
+                    value={value || options[0].value}
                     onChange={e => setForm(current => ({ ...current, [param.key]: e.target.value }))}
                     className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-hover)] px-3 py-2 text-sm outline-none focus:border-[var(--text-accent)]"
                   >
-                    {param.options.map((option: string) => (
-                      <option key={option} value={option}>{option}</option>
+                    {options.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </select>
                 </label>

@@ -128,6 +128,8 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
         "flow_action_credits_limit",
         "prompt_remaining_percent",
         "flow_action_remaining_percent",
+        "balance",
+        "space",
     ):
         if data.get(key) not in (None, ""):
             overview[key] = data.get(key)
@@ -261,7 +263,7 @@ class PlatformRuntime:
                 )
             )
         return actions
-    
+
     def list_capabilities(self, platform: str) -> list[str]:
         """List platform's declared capabilities."""
         load_all()
