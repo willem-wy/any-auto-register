@@ -120,6 +120,44 @@ function getCashierUrl(acc: any) {
   return overview?.cashier_url || acc?.cashier_url || ''
 }
 
+const ACCOUNT_TYPE_LABELS: Record<string, string> = {
+  email: '邮箱',
+  phone: '手机号',
+  other: '其他',
+}
+
+// 账号池里 email 字段承载登录标识：可能是邮箱，也可能是手机号
+function getAccountType(acc: any) {
+  const raw = String(acc?.account_type || '').trim()
+  if (ACCOUNT_TYPE_LABELS[raw]) return ACCOUNT_TYPE_LABELS[raw]
+  const identifier = String(acc?.email || '').trim()
+  if (!identifier) return '-'
+  if (identifier.includes('@')) return ACCOUNT_TYPE_LABELS.email
+  if (/^\+?\d[\d\s-]{4,19}$/.test(identifier)) return ACCOUNT_TYPE_LABELS.phone
+  return ACCOUNT_TYPE_LABELS.other
+}
+
+function getAccountBalance(acc: any): number | string | null {
+  const summary = getDisplaySummary(acc)
+  const metrics = [
+    ...(Array.isArray(summary?.primary_metrics) ? summary.primary_metrics : []),
+    ...(Array.isArray(summary?.secondary_metrics) ? summary.secondary_metrics : []),
+  ]
+  const metric = metrics.find((item: any) =>
+    ['lk888_balance', 'remaining_credits', 'chatgpt_credits'].includes(String(item?.key || '')),
+  )
+  const overview = getAccountOverview(acc)
+  const value = metric?.value ?? overview?.balance ?? overview?.remaining_credits
+  if (value === null || value === undefined || value === '') return null
+  return typeof value === 'number' || typeof value === 'string' ? value : String(value)
+}
+
+function formatBalance(value: number | string | null) {
+  if (value === null) return '-'
+  if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(2)
+  return String(value)
+}
+
 function getPrimaryToken(acc: any) {
   if (acc?.primary_token) return acc.primary_token
   const credential = getCredentials(acc).find((item: any) => item?.scope === 'platform' && item?.credential_type === 'token' && item?.value)
@@ -601,7 +639,7 @@ function AddModal({ platform, onClose, onDone }: { platform: string; onClose: ()
           <button onClick={onClose} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"><X className="h-4 w-4" /></button>
         </div>
         <div className="px-6 py-4 space-y-3">
-          {[['email','邮箱','text'],['password','密码','text'],['primary_token','主凭证','text'],['cashier_url','试用链接','text']].map(([k,l,t]) => (
+          {[['email','账号（邮箱/手机号）','text'],['password','密码','text'],['primary_token','主凭证','text'],['cashier_url','试用链接','text']].map(([k,l,t]) => (
             <div key={k}>
               <label className="text-xs text-[var(--text-muted)] block mb-1">{l}</label>
               <input type={t} value={(form as any)[k]} onChange={e => set(k, e.target.value)}
@@ -1401,7 +1439,7 @@ function DetailModal({ acc, onClose, onSave }: { acc: any; onClose: () => void; 
         <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)] shrink-0">
           <div>
             <h2 className="text-base font-semibold text-[var(--text-primary)]">账号详情</h2>
-            <p className="text-xs text-[var(--text-muted)] mt-0.5">{acc.email}</p>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">{acc.email} · {getAccountType(acc)}</p>
           </div>
           <button onClick={onClose} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"><X className="h-4 w-4" /></button>
         </div>
@@ -1893,7 +1931,7 @@ export default function Accounts() {
               </div>
               <input
                 type="text"
-                placeholder="搜索账号邮箱..."
+                placeholder="搜索账号（邮箱/手机号）..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 className="w-full rounded-md border border-[var(--border)] bg-transparent py-1.5 pl-8 pr-3 text-sm text-[var(--text-primary)] transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--text-primary)]"
@@ -1977,12 +2015,13 @@ export default function Accounts() {
         <table className="table-fixed w-full min-w-[900px] text-sm">
           <colgroup>
             <col className="w-10" />
-            <col className="w-[30%]" />
-            <col className="w-[12%]" />
             <col className="w-[26%]" />
+            <col className="w-[10%]" />
+            <col className="w-[10%]" />
+            <col className="w-[24%]" />
             <col className="w-[8%]" />
             <col className="w-[12%]" />
-            <col className="w-[12%]" />
+            <col className="w-[10%]" />
           </colgroup>
           <thead className="sticky top-0 z-10  bg-[var(--bg-pane)]/80">
             <tr className="border-b border-[var(--border)] text-xs uppercase tracking-wider font-medium text-[var(--text-muted)]">
@@ -1994,8 +2033,9 @@ export default function Accounts() {
                   className="checkbox-accent rounded-[3px] border-[var(--border)] focus:ring-[var(--text-primary)] focus:ring-offset-0 bg-transparent text-[var(--text-primary)]"
                 />
               </th>
-              <th className="px-3 py-2 text-left">邮箱 (Email)</th>
-              <th className="px-3 py-2 text-left">密码 (Pwd)</th>
+              <th className="px-3 py-2 text-left">账号 (Account)</th>
+              <th className="px-3 py-2 text-left">账号类型 (Type)</th>
+              <th className="px-3 py-2 text-left">余额 (Balance)</th>
               <th className="px-3 py-2 text-left">状态 (Status)</th>
               <th className="px-3 py-2 text-left">试用链接 (Link)</th>
               <th className="px-3 py-2 text-left">注册时间 (Date)</th>
@@ -2005,7 +2045,7 @@ export default function Accounts() {
           <tbody>
             {accounts.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-24 text-center">
+                <td colSpan={8} className="px-4 py-24 text-center">
                   <div className="flex flex-col items-center justify-center space-y-3">
                     <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--bg-pane)] border border-[var(--border)] shadow-sm">
                       <svg className="h-6 w-6 text-[var(--text-muted)]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg>
@@ -2062,11 +2102,24 @@ export default function Accounts() {
                     </div>
                   )}
                 </td>
-                <td className="px-3 py-2.5 font-mono text-[13px] text-[var(--text-muted)] align-top">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate blur-[3px] transition-all cursor-default hover:blur-none select-none hover:select-auto hover:text-[var(--text-primary)]" title={acc.password}>{acc.password}</span>
-                    <button onClick={e => { e.stopPropagation(); copy(acc.password) }} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] opacity-0 group-hover:opacity-100 transition-opacity"><Copy className="h-3 w-3" /></button>
-                  </div>
+                <td className="px-3 py-2.5 align-top">
+                  <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--bg-hover)] px-2 py-0.5 text-xs font-medium text-[var(--text-secondary)]">
+                    {getAccountType(acc)}
+                  </span>
+                </td>
+                <td className="px-3 py-2.5 align-top">
+                  {(() => {
+                    const balance = getAccountBalance(acc)
+                    if (balance === null) {
+                      return <span className="text-xs text-[var(--text-muted)]/50">-</span>
+                    }
+                    const positive = typeof balance === 'number' ? balance > 0 : /^[\d.]+$/.test(balance) && Number(balance) > 0
+                    return (
+                      <span className={`font-mono text-sm font-semibold ${positive ? 'text-emerald-500' : 'text-[var(--text-primary)]'}`}>
+                        {formatBalance(balance)}
+                      </span>
+                    )
+                  })()}
                 </td>
                 <td className="px-3 py-2.5 align-top">
                   <div className="min-w-0 flex flex-col items-start gap-1.5">

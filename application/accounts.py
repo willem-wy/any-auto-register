@@ -23,6 +23,18 @@ IMPORT_LINE_RE = re.compile(
     r'(?:\s+(?P<extra>.*))?\s*$'
 )
 
+PHONE_IDENTIFIER_RE = re.compile(r"^\+?\d[\d\s-]{4,19}$")
+
+
+def classify_account_identifier(identifier: str) -> str:
+    """按登录标识判断账号类型：email / phone / other。"""
+    value = str(identifier or "").strip()
+    if "@" in value:
+        return "email"
+    if value and PHONE_IDENTIFIER_RE.match(value):
+        return "phone"
+    return "other"
+
 
 def _decode_import_token(value: str) -> str:
     text = str(value or "").strip()
@@ -139,6 +151,7 @@ class AccountsService:
             "id": item.id,
             "platform": item.platform,
             "email": item.email,
+            "account_type": classify_account_identifier(item.email),
             "password": item.password,
             "user_id": item.user_id,
             "primary_token": item.primary_token,
