@@ -16,11 +16,14 @@ from .registry import get, load_all
 #   scheduler_auto_platform          默认 lk888，置空表示关闭自动任务
 #   scheduler_balance_interval_hours 默认 1
 #   scheduler_checkin_hour           默认 8（北京时间每天 08:00 签到一次，错过时刻会在下一轮补跑）
+#   scheduler_stuck_task_timeout_minutes 默认 30（运行中任务超时未更新则标记中断，防僵尸任务阻塞调度）
 DEFAULT_AUTO_PLATFORM = "lk888"
 DEFAULT_BALANCE_INTERVAL_HOURS = 1.0
 DEFAULT_CHECKIN_HOUR = 8
+DEFAULT_STUCK_TASK_TIMEOUT_MINUTES = 30.0
 CHECKIN_TZ = timezone(timedelta(hours=8))
 TICK_SECONDS = 30
+STUCK_CHECK_INTERVAL_SECONDS = 600
 
 
 def _utcnow_iso() -> str:
@@ -40,6 +43,7 @@ class Scheduler:
         self._thread: threading.Thread = None
         self._last_trial_check = 0.0
         self._last_balance_check = 0.0
+        self._last_stuck_check = 0.0
         self._checkin_retry_at = 0.0
 
     def start(self):
@@ -70,6 +74,10 @@ class Scheduler:
                 ):
                     self.run_balance_check()
                     self._last_balance_check = now
+
+                if now - self._last_stuck_check >= STUCK_CHECK_INTERVAL_SECONDS:
+                    self._reap_stuck_tasks()
+                    self._last_stuck_check = now
 
                 if self._checkin_due(now):
                     self.run_auto_checkin()
@@ -196,6 +204,58 @@ class Scheduler:
                 .where(TaskModel.status.in_(statuses))
                 .limit(1)
             ).first() is not None
+
+    # ------------------------------------------------------------------
+    # 僵尸任务看门狗
+    # ------------------------------------------------------------------
+
+    def _reap_stuck_tasks(self) -> None:
+        """运行中任务超时未更新则标记中断，防止僵尸任务长期阻塞调度（如自动签到）。"""
+        from application.tasks import (
+            ACTIVE_TASK_STATUSES,
+            TASK_STATUS_INTERRUPTED,
+            append_task_event,
+        )
+
+        timeout_min = max(
+            _read_float(
+                "scheduler_stuck_task_timeout_minutes",
+                DEFAULT_STUCK_TASK_TIMEOUT_MINUTES,
+            ),
+            5.0,
+        )
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=timeout_min)
+        with Session(engine) as session:
+            tasks = session.exec(
+                select(TaskModel).where(
+                    TaskModel.status.in_(sorted(ACTIVE_TASK_STATUSES))
+                )
+            ).all()
+            stuck = []
+            for task in tasks:
+                updated = task.updated_at
+                if updated is None:
+                    continue
+                if updated.tzinfo is None:
+                    updated = updated.replace(tzinfo=timezone.utc)
+                if updated < cutoff:
+                    task.status = TASK_STATUS_INTERRUPTED
+                    task.error = task.error or "任务执行超时未更新，被看门狗标记为中断"
+                    task.finished_at = datetime.now(timezone.utc)
+                    task.updated_at = datetime.now(timezone.utc)
+                    session.add(task)
+                    stuck.append(task)
+            session.commit()
+            task_ids = [task.id for task in stuck]
+        for task_id in task_ids:
+            append_task_event(
+                task_id,
+                "任务执行超时未更新，被调度看门狗标记为中断",
+                event_type="state",
+                level="warning",
+            )
+        if task_ids:
+            print(f"[Scheduler] 看门狗清理 {len(task_ids)} 个超时任务: {task_ids}")
 
     # ------------------------------------------------------------------
     # Trial 到期检查
